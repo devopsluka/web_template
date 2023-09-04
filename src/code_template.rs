@@ -6,6 +6,8 @@ use serde::{Deserialize, Serialize};
 
 use reqwest::Client as HttpClient;
 
+use bcrypt::{hash, verify, DEFAULT_COST};
+
 use async_trait::async_trait;
 
 use std::collections::HashMap;
@@ -158,7 +160,15 @@ async fn register(app_state: web::Data<AppState>, user: web::Json<User>) -> impl
         .db
         .lock()
         .expect("Failed to lock database when registering an user");
-    db.insert_user(user.into_inner());
+
+    let hashed_password = hash(&user.password, DEFAULT_COST).expect("Failed to hash password");
+    let new_user = User {
+        id: user.id,
+        username: user.username.clone(),
+        password: hashed_password,
+    };
+
+    db.insert_user(new_user);
     let _ = db.save_to_file();
     HttpResponse::Ok().finish()
 }
@@ -170,15 +180,16 @@ async fn login(app_state: web::Data<AppState>, user: web::Json<User>) -> impl Re
         .expect("Failed to lock database when logging in");
     match db.get_user_by_name(&user.username) {
         Some(stored_user) => {
-            if stored_user.password == user.password {
+            if verify(&user.password, &stored_user.password).expect("Failed to verify password") {
                 HttpResponse::Ok().body("Login successful!")
             } else {
-                HttpResponse::BadRequest().body("Invalid username or password")
+                HttpResponse::BadRequest().body("Invalid username and/or password")
             }
         }
         None => HttpResponse::Unauthorized().finish(),
     }
 }
+
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
