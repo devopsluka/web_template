@@ -186,7 +186,7 @@ async fn login(app_state: web::Data<AppState>, user: web::Json<User>) -> impl Re
                 HttpResponse::BadRequest().body("Invalid username and/or password")
             }
         }
-        None => HttpResponse::Unauthorized().finish(),
+        None => HttpResponse::Unauthorized().body("Invalid username or password"),
     }
 }
 

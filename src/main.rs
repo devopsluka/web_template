@@ -1,25 +1,19 @@
 use actix_cors::Cors;
-
 use actix_web::{http::header, web, App, HttpResponse, HttpServer, Responder};
-
 use serde::{Deserialize, Serialize};
-
-use reqwest::Client as HttpClient;
-
 use bcrypt::{hash, verify, DEFAULT_COST};
-
-use async_trait::async_trait;
-
 use std::collections::HashMap;
 use std::fs;
 use std::io::Write;
 use std::sync::Mutex;
+use chrono::prelude::*;
 
 #[derive(Serialize, Debug, Deserialize, Clone)]
-struct Task {
+struct Service {
     id: u64,
     name: String,
-    completed: bool,
+    price: f32,
+    duration: u32,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -30,42 +24,36 @@ struct User {
 }
 
 #[derive(Serialize, Deserialize)]
+struct Claims {
+    sub: String,
+    exp: usize,
+}
+
+#[derive(Serialize, Deserialize)]
 struct Database {
-    tasks: HashMap<u64, Task>,
+    services: HashMap<u64, Service>,
     users: HashMap<u64, User>,
 }
 
 impl Database {
     fn new() -> Self {
         Self {
-            tasks: HashMap::new(),
+            services: HashMap::new(),
             users: HashMap::new(),
         }
     }
 
-    // CRUD DATA
-
-    fn insert(&mut self, task: Task) {
-        self.tasks.insert(task.id, task);
+    fn insert(&mut self, service: Service) {
+        self.services.insert(service.id, service);
     }
 
-    fn get(&self, id: &u64) -> Option<&Task> {
-        self.tasks.get(id)
+    fn get(&self, id: &u64) -> Option<&Service> {
+        self.services.get(id)
     }
 
-    fn get_all(&self) -> Vec<&Task> {
-        self.tasks.values().collect()
+    fn get_all(&self) -> Vec<&Service> {
+        self.services.values().collect()
     }
-
-    fn delete(&mut self, id: &u64) {
-        self.tasks.remove(id);
-    }
-
-    fn update(&mut self, task: Task) {
-        self.tasks.insert(task.id, task);
-    }
-
-    // USER CRUD
 
     fn insert_user(&mut self, user: User) {
         self.users.insert(user.id, user);
@@ -74,8 +62,6 @@ impl Database {
     fn get_user_by_name(&self, username: &str) -> Option<&User> {
         self.users.values().find(|u| u.username == username)
     }
-
-    // SAVE DATABASE
 
     fn save_to_file(&self) -> std::io::Result<()> {
         let data = serde_json::to_string(&self)?;
@@ -95,60 +81,34 @@ struct AppState {
     db: Mutex<Database>,
 }
 
-
-// CREATE
-async fn create_task(app_state: web::Data<AppState>, task: web::Json<Task>) -> impl Responder {
+async fn create_service(app_state: web::Data<AppState>, service: web::Json<Service>) -> impl Responder {
     let mut db = app_state
         .db
         .lock()
-        .expect("Failed to lock database in create task fn");
-    db.insert(task.into_inner());
+        .expect("Failed to lock database in create service fn");
+    db.insert(service.into_inner());
     let _ = db.save_to_file();
     HttpResponse::Ok().finish()
 }
 
-
-// READ
-async fn read_task(app_state: web::Data<AppState>, id: web::Path<u64>) -> impl Responder {
+async fn read_service(app_state: web::Data<AppState>, id: web::Path<u64>) -> impl Responder {
     let db = app_state
         .db
         .lock()
-        .expect("Failed to lock database in reading task");
+        .expect("Failed to lock database in reading service");
     match db.get(&id.into_inner()) {
-        Some(task) => HttpResponse::Ok().json(task),
+        Some(service) => HttpResponse::Ok().json(service),
         None => HttpResponse::NotFound().finish()
     }
 }
 
-async fn read_all_tasks(app_state: web::Data<AppState>) -> impl Responder {
+async fn read_all_services(app_state: web::Data<AppState>) -> impl Responder {
     let db = app_state
         .db
         .lock()
-        .expect("Failed to lock database in reading tasks");
-    let tasks = db.get_all();
-    HttpResponse::Ok().json(tasks)
-}
-
-// UPDATE
-async fn update_task(app_state: web::Data<AppState>, task: web::Json<Task>) -> impl Responder {
-    let mut db = app_state
-        .db
-        .lock()
-        .expect("Failed to lock database in updating a task");
-    db.update(task.into_inner());
-    let _ = db.save_to_file();
-    HttpResponse::Ok().finish()
-}
-
-// DELETE
-async fn delete_task(app_state: web::Data<AppState>, id: web::Path<u64>) -> impl Responder {
-    let mut db = app_state
-        .db
-        .lock()
-        .expect("Failed to lock database in deleting a task");
-    db.delete(&id.into_inner());
-    let _ = db.save_to_file();
-    HttpResponse::Ok().finish()
+        .expect("Failed to lock database in reading services");
+    let services = db.get_all();
+    HttpResponse::Ok().json(services)
 }
 
 async fn home_page() -> actix_web::Result<HttpResponse>{
@@ -181,7 +141,7 @@ async fn login(app_state: web::Data<AppState>, user: web::Json<User>) -> impl Re
     match db.get_user_by_name(&user.username) {
         Some(stored_user) => {
             if verify(&user.password, &stored_user.password).expect("Failed to verify password") {
-                HttpResponse::Ok().body("Login successful!")
+                HttpResponse::Ok().body("Login successful")
             } else {
                 HttpResponse::BadRequest().body("Invalid username and/or password")
             }
@@ -189,7 +149,6 @@ async fn login(app_state: web::Data<AppState>, user: web::Json<User>) -> impl Re
         None => HttpResponse::Unauthorized().body("Invalid username or password"),
     }
 }
-
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
@@ -218,11 +177,9 @@ async fn main() -> std::io::Result<()> {
             )
             .app_data(data.clone())
             .route("/", web::get().to(home_page))
-            .route("/task", web::post().to(create_task))
-            .route("/task", web::get().to(read_all_tasks))
-            .route("/task/{id}", web::get().to(read_task))
-            .route("/task", web::put().to(update_task))
-            .route("/task/{id}", web::delete().to(delete_task))
+            .route("/service", web::post().to(create_service))
+            .route("/service", web::get().to(read_all_services))
+            .route("/service/{id}", web::get().to(read_service))
             .route("register", web::post().to(register))
             .route("login", web::post().to(login))
     })
